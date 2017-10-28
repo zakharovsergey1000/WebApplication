@@ -1,0 +1,356 @@
+{
+            using (var dbLabelTransaction = db.Database.BeginTransaction())
+            {
+                try
+                {
+                    WebApplication.Models.CodeFirst.Task newEntity = null;
+
+                    if (entityDTO.ID != 0)
+                    {
+                        newEntity = db.Tasks.Where(b => b.ID == entityDTO.ID).SingleOrDefault();
+                        if (newEntity == null)
+                        {
+                            dbLabelTransaction.Rollback();
+                            return BadRequest(ModelState);
+                            //return new SetEntityResponse(SetEntityResult.EntityIsNotFound, null, entityDTO.ID, null, null, DateTime.UtcNow);
+                        }
+                        // Load the UserProfile related to a given EntityId 
+                        db.Entry(newEntity).Reference(p => p.UserProfile).Load();
+                        //                         if (!(newEntity.UserProfile.Username.Equals(request.Credentials.Username)))
+                        //                         {
+                        //                             dbLabelTransaction.Rollback();
+                        //                                                  return     BadRequest(ModelState);  
+                        //// return new SetEntityResponse(SetEntityResult.AccessDenied, null, 0, null, null, DateTime.UtcNow);
+                        //                         }
+                        if (newEntity.Deleted)
+                        {
+                            dbLabelTransaction.Rollback();
+                            return BadRequest(ModelState);
+                            //  return new SetEntityResponse(SetEntityResult.EntityIsDeleted, null, entityDTO.ID, null, null, DateTime.UtcNow);
+                        }
+                        if (entityDTO.Deleted)
+                        {
+                            MarkTaskAsDeleted(entityDTO.ID);
+                            db.SaveChanges();
+                            dbLabelTransaction.Commit();
+                            return BadRequest(ModelState);
+                            //    return new SetEntityResponse(SetEntityResult.EntityIsDeleted, null, entityDTO.ID, null, null, DateTime.UtcNow);
+                        }
+                        if (entityDTO.LastMod < new DateTime(newEntity.LastMod.UtcTicks / 10000 * 10000, DateTimeKind.Utc))
+                        {
+                            dbLabelTransaction.Rollback();
+                            return BadRequest(ModelState);
+                            //  return new SetEntityResponse(SetEntityResult.EntityOnTheServerIsNewer, null, entityDTO.ID, newEntity.LastMod.UtcDateTime, null, DateTime.UtcNow);
+                        }
+                    }
+                    else
+                    {
+                        newEntity = new WebApplication.Models.CodeFirst.Task();
+                        db.Tasks.Add(newEntity);
+                    }
+
+                    bool isPreviousStateCompleted = newEntity.CompletedPercent == 100;
+
+                    WebApplication.Models.CodeFirst.Task parentEntity = null;
+                    if (entityDTO.ParentID != 0)
+                    {
+                        parentEntity = db.Tasks.Where(b => b.ID == entityDTO.ParentID).SingleOrDefault();
+
+                        if (parentEntity == null)
+                        {
+                            //dbLabelTransaction.Rollback();
+                            //     return new SetEntityResponse(SetEntityResult.ParentEntityIsNotFound, null,/*"The requested parent entity was not found on the server",*/ entityDTO.ID, null, null, DateTime.UtcNow);
+                            return BadRequest("entityDTO.ParentID != 0 && parentEntity == null");
+                        }
+
+                        if (parentEntity.Deleted && !entityDTO.Deleted)
+                        {
+                            //dbLabelTransaction.Rollback();
+                            return BadRequest("parentEntity.Deleted && !entityDTO.Deleted");
+                            //return new SetEntityResponse(SetEntityResult.ParentEntityIsDeleted, null,/*"The requested parent entity was deleted on the server",*/ entityDTO.ID, null, null, DateTime.UtcNow);
+                        }
+                    }
+
+                    // verify field consistency
+
+                    if (entityDTO.ID == 0 && entityDTO.Deleted)
+                    {
+                        // dbLabelTransaction.Rollback();
+                        //return new SetEntityResponse(SetEntityResult.EntityHasIncorrectData, "entityDTO.ID == 0 && entityDTO.Deleted", 0, null, null, DateTime.UtcNow);
+                        return BadRequest("entityDTO.ID == 0 && entityDTO.Deleted");
+                    }
+
+                    if (entityDTO.UserName == null || entityDTO.UserName.Equals(""))
+                    {
+                        //      return new SetEntityResponse(SetEntityResult.EntityHasIncorrectData, "entityDTO.UserName == null || entityDTO.UserName.Equals(\"\")", 0, null, null, DateTime.UtcNow);
+                        return BadRequest("entityDTO.UserName == null || entityDTO.UserName.Equals(\"\")");
+                    }
+                    if (entityDTO.Period == null)
+                    {
+                        if (entityDTO.RepeatCount != null)
+                        {
+                            dbLabelTransaction.Rollback();
+                            return BadRequest("entityDTO.ID == 0 && entityDTO.Deleted");//          return new SetEntityResponse(SetEntityResult.EntityHasIncorrectData, "entityDTO.Period == null && entityDTO.RepeatCount != null", 0, null, null, DateTime.UtcNow);
+                        }
+                    }
+                    else if (!(entityDTO.Period >= 1))
+                    {
+                        dbLabelTransaction.Rollback();
+                        return BadRequest("entityDTO.ID == 0 && entityDTO.Deleted");//       return new SetEntityResponse(SetEntityResult.EntityHasIncorrectData, "entityDTO.Period != null && !(entityDTO.Period >= 1)", 0, null, null, DateTime.UtcNow);
+                    }
+
+                    if (entityDTO.Period != null && (entityDTO.StartDate == null || entityDTO.StartTime == null || entityDTO.EndDate == null || entityDTO.EndTime == null))
+                    {
+                        dbLabelTransaction.Rollback();
+                        return BadRequest("entityDTO.ID == 0 && entityDTO.Deleted");//      return new SetEntityResponse(SetEntityResult.EntityHasIncorrectData, "entityDTO.Period != null && (entityDTO.StartDate == null || entityDTO.StartTime == null || entityDTO.EndDate == null || entityDTO.EndTime == null)", 0, null, null, DateTime.UtcNow);
+                    }
+
+                    // verify child parent relation consistency
+                    if (entityDTO.ID != 0 && entityDTO.ParentID != 0 && entityDTO.ID == entityDTO.ParentID)
+                    {
+                        //     dbLabelTransaction.Rollback();
+                        //      return new SetEntityResponse(SetEntityResult.EntityHasIncorrectData, "Parent entity is set to the entity itself", 0, null, null, DateTime.UtcNow);
+                        return BadRequest("entityDTO.ID != 0 && entityDTO.ParentID != 0 && entityDTO.ID == entityDTO.ParentID");
+                    }
+
+                    // verify reminders consistency
+                    foreach (RemindDTO reminder in entityDTO.Reminds)
+                    {
+                        if (reminder.RemindAt == null && reminder.RemindOffset == null)
+                        {
+                            return BadRequest("entityDTO.ID == 0 && entityDTO.Deleted");//         return new SetEntityResponse(SetEntityResult.EntityHasIncorrectData, "reminder.RemindAt == null && reminder.RemindOffset == null", 0, null, null, DateTime.UtcNow);
+                        }
+                        if (reminder.RemindType == TaskRemindType.AbsoluteTime && (reminder.RemindOffset != null || reminder.RemindAt == null || reminder.RemindEachIteration))
+                        {
+                            return BadRequest("entityDTO.ID == 0 && entityDTO.Deleted");//        return new SetEntityResponse(SetEntityResult.EntityHasIncorrectData, "reminder.RemindType == TaskRemindType.AbsoluteTime && (reminder.RemindOffset != null || reminder.RemindAt == null || reminder.RemindEachIteration)", 0, null, null, DateTime.UtcNow);
+                        }
+                        if (reminder.RemindType == TaskRemindType.TimeSpanBeforeStart && (reminder.RemindOffset == null || reminder.RemindAt != null))
+                        {
+                            return BadRequest("entityDTO.ID == 0 && entityDTO.Deleted");//         return new SetEntityResponse(SetEntityResult.EntityHasIncorrectData, "reminder.RemindType == TaskRemindType.TimeSpanBeforeStart && (reminder.RemindOffset == null || reminder.RemindAt != null)", 0, null, null, DateTime.UtcNow);
+                        }
+                        if (reminder.RemindEachIteration && (reminder.RemindOffset == null || reminder.RemindAt != null))
+                        {
+                            return BadRequest("entityDTO.ID == 0 && entityDTO.Deleted");//         return new SetEntityResponse(SetEntityResult.EntityHasIncorrectData, "reminder.RemindEachIteration && (reminder.RemindOffset == null || reminder.RemindAt != null)", 0, null, null, DateTime.UtcNow);
+                        }
+
+                        // verify task and reminder consistency
+                        if (entityDTO.Type == TaskType.Task)
+                        {
+                            if (reminder.RemindEachIteration)
+                            {
+                                return BadRequest("entityDTO.ID == 0 && entityDTO.Deleted");//           return new SetEntityResponse(SetEntityResult.EntityHasIncorrectData, "entityDTO.Type == TaskType.Task && reminder.RemindEachIteration", 0, null, null, DateTime.UtcNow);
+                            }
+                            if (entityDTO.StartDate == null && (reminder.RemindAt == null || reminder.RemindOffset != null))
+                            {
+                                return BadRequest("entityDTO.ID == 0 && entityDTO.Deleted");//          return new SetEntityResponse(SetEntityResult.EntityHasIncorrectData, "entityDTO.Type == TaskType.Task && entityDTO.StartDate == null && (reminder.RemindAt == null || reminder.RemindOffset != null)", 0, null, null, DateTime.UtcNow);
+                            }
+                        }
+                    }
+
+                    if (entityDTO.ID != 0)
+                    {
+                        db.Entry(newEntity).Collection(p => p.Reminds).Load();
+                        //newEntity.RemindList.Clear();
+                        while (newEntity.Reminds.Count > 0)
+                        {
+                            // db.Reminds.Remove(newEntity.RemindList.First());
+                        }
+
+                        //db.Entry(newEntity).Collection(p => p.LabelList).Load();
+                        // newEntity.LabelList.Clear();
+                        //while (newEntity.LabelList.Count > 0)
+                        //{
+                        //    db.Labels.Remove(newEntity.LabelList.First());
+                        //}
+
+                        //db.Entry(newEntity).Collection(p => p.ContactList).Load();
+                        //// newEntity.ContactList.Clear();
+                        //while (newEntity.ContactList.Count > 0)
+                        //{
+                        //    db.Contacts.Remove(newEntity.ContactList.First());
+                        //}
+
+                        //db.Entry(newEntity).Collection(p => p.FileList).Load();
+                        ////newEntity.FileList.Clear();
+                        //while (newEntity.FileList.Count > 0)
+                        //{
+                        //    db.Files.Remove(newEntity.FileList.First());
+                        //}
+                    }
+
+
+                    if (entityDTO.Created.Kind == DateTimeKind.Unspecified)
+                    {
+                        entityDTO.Created = new DateTime(entityDTO.Created.Ticks, DateTimeKind.Utc);
+                    }
+
+                    //TODO remove the code below. 
+                    if (entityDTO.ParentID == 0)
+                    {
+                        entityDTO.ParentID = null;
+                    }
+
+                    newEntity.UserProfile = db.UserProfiles.Where(b => b.Username.Equals(entityDTO.UserName)).Single();
+                    newEntity.UserName = entityDTO.UserName;
+                    newEntity.Text = entityDTO.Text;
+                    newEntity.FullText = entityDTO.FullText;
+                    newEntity.Type = entityDTO.Type;
+                    newEntity.ParentID = entityDTO.ParentID;
+                    newEntity.StartDate = entityDTO.StartDate;
+                    newEntity.EndDate = entityDTO.EndDate;
+                    newEntity.Length = entityDTO.Length;
+                    newEntity.ActualLength = entityDTO.FactLength;
+                    newEntity.Period = entityDTO.Period;
+                    newEntity.PeriodUnit = entityDTO.PeriodUnit;
+                    newEntity.Priority = entityDTO.Priority;
+                    newEntity.CompletedPercent = entityDTO.CompletedPercent;
+                    newEntity.CompletedTime = entityDTO.CompletedTime;
+                    newEntity.Deleted = entityDTO.Deleted;
+                    newEntity.SortOrder = entityDTO.SortOrder;
+                    newEntity.CompletedInCurrentPeriod = entityDTO.CompletedInCurrentPeriod;
+                    newEntity.RepeatCount = entityDTO.RepeatCount;
+                    newEntity.RepeatOnMonday = entityDTO.RepeatOnMonday;
+                    newEntity.RepeatOnTuesday = entityDTO.RepeatOnTuesday;
+                    newEntity.RepeatOnWednesday = entityDTO.RepeatOnWednesday;
+                    newEntity.RepeatOnThursday = entityDTO.RepeatOnThursday;
+                    newEntity.RepeatOnFriday = entityDTO.RepeatOnFriday;
+                    newEntity.RepeatOnSaturday = entityDTO.RepeatOnSaturday;
+                    newEntity.RepeatOnSunday = entityDTO.RepeatOnSunday;
+                    newEntity.ChainChildren = entityDTO.ChainChildren;
+                    newEntity.LastMod = entityDTO.LastMod == null ? DateTimeOffset.UtcNow : entityDTO.LastMod;
+                    newEntity.UID = entityDTO.UID;
+                    newEntity.TimezoneOffset = entityDTO.TimezoneOffset;
+                    newEntity.IsInput = entityDTO.IsInput;
+                    newEntity.IsOutput = entityDTO.IsOutput;
+                    newEntity.EndTime = entityDTO.EndTime;
+                    newEntity.StartTime = entityDTO.StartTime;
+
+                    //foreach (Workgroup workgroup in entityDTO.Workgroups)
+                    //{
+                    //    Workgroups entity2 = new Workgroups();
+
+                    //    entity2.GroupID = workgroup.GroupID;
+                    //    entity2.ID = workgroup.ID;
+                    //    entity2.OwnerID = workgroup.OwnerID;
+                    //    entity2.Name = workgroup.Name;
+                    //    entity2.State = workgroup.State;
+
+                    //    newEntity.WorkgroupList.Add(entity2);
+                    //}
+
+                    foreach (RemindDTO remind in entityDTO.Reminds)
+                    {
+                        Remind entity2 = new Remind();
+
+                        entity2.ID = remind.ID;
+                        entity2.ID = remind.ID;
+                        entity2.NotificationContactID = remind.NotificationContactID;
+                        entity2.RemindAt = remind.RemindAt;
+                        entity2.Sended = remind.Sended;
+                        entity2.Errors = remind.Errors;
+                        entity2.RemindEachIteration = remind.RemindEachIteration;
+                        entity2.Text = remind.Text;
+                        entity2.Enabled = remind.Enabled;
+                        entity2.LastSend = remind.LastSend;
+                        entity2.RemindType = remind.RemindType;
+                        entity2.RemindOffset = remind.RemindOffset;
+                        entity2.RemindsCount = remind.RemindsCount;
+                        entity2.PrepayedSmsCount = remind.PrepayedSmsCount;
+                        entity2.Deleted = remind.Deleted;
+                        entity2.SendsCount = remind.SendsCount;
+                        entity2.SmsCreditsError = remind.SmsCreditsError;
+                        entity2.IsAlarm = remind.IsAlarm;
+
+                        newEntity.Reminds.Add(entity2);
+                    }
+
+                    List<EntityData> NotFoundRelatedEntities = new List<EntityData>();
+                    //foreach (int entityId in entityDTO.Contacts)
+                    //{
+                    //    Contact entity2 = db.Contacts.Where(b => b.ContactID == entityId && b.UserProfile.Username.Equals(entityDTO.UserName)).SingleOrDefault();
+                    //    if (entity2 != null)
+                    //    {
+                    //        newEntity.ContactList.Add(entity2);
+                    //    }
+                    //    else
+                    //    {
+                    //        NotFoundRelatedEntities.Add(new EntityData(entity2.ContactID, EntityType.Contact));
+                    //    }
+                    //}
+
+                    foreach (int entityId in entityDTO.Labels)
+                    {
+                        Label entity2 = db.Labels.Where(b => b.ID == entityId && b.UserProfile.Username.Equals(entityDTO.UserName)).SingleOrDefault();
+                        if (entity2 != null)
+                        {
+                        }
+                        else
+                        {
+                            NotFoundRelatedEntities.Add(new EntityData(entity2.ID, EntityType.Label));
+                        }
+                    }
+
+                    //foreach (int entityId in entityDTO.Files)
+                    //{
+                    //    Files entity2 = db.Files.Where(b => b.FileID == entityId && b.UserProfile.Username.Equals(entityDTO.UserName)).SingleOrDefault();
+                    //    if (entity2 != null)
+                    //    {
+                    //        newEntity.FileList.Add(entity2);
+                    //    }
+                    //    else
+                    //    {
+                    //        NotFoundRelatedEntities.Add(new EntityData(entity2.FileID, EntityType.File));
+                    //    }
+                    //}
+
+                    // adjust completed state on the subtree
+                    if (entityDTO.ID != 0)
+                    {
+                        if (entityDTO.CompletedPercent == 100)
+                        {
+                            List<TaskTreeNode> taskTree = getTaskTree(db, entityDTO.ID, true, true, true, true);
+
+                            // If completed set completed on the nodes of the subtree
+
+                            for (int i1 = 1; i1 < taskTree.Count; i1++)
+                            {
+                                if (taskTree[i1].Node.CompletedPercent < 100)
+                                {
+                                    taskTree[i1].Node.CompletedPercent = 100;
+                                    taskTree[i1].Node.LastMod = DateTimeOffset.UtcNow;
+                                }
+                            }
+                        }
+                        else
+                        {
+                            if (isPreviousStateCompleted)
+                            {
+                                long? nextId = entityDTO.ParentID;
+                                while (nextId != 0)
+                                {
+                                    WebApplication.Models.CodeFirst.Task entity2 = db.Tasks.Where(b => b.ID == nextId).Single();
+                                    if (entity2.CompletedPercent < 100)
+                                    {
+                                        break;
+                                    }
+                                    entity2.CompletedPercent = 0;
+                                    entity2.LastMod = DateTimeOffset.UtcNow;
+                                    nextId = entity2.ParentID;
+                                }
+                            }
+                        }
+                    }
+
+                    db.SaveChanges();
+
+                    dbLabelTransaction.Commit();
+
+                    return new SetEntityResponse(SetEntityResult.Saved, null, newEntity.TaskID, newEntity.LastMod.UtcDateTime, NotFoundRelatedEntities.Count == 0 ? null : NotFoundRelatedEntities, DateTime.UtcNow);
+                }
+                catch (Exception e)
+                {
+                    dbLabelTransaction.Rollback();
+                    throw e;
+                }
+            }
+        }

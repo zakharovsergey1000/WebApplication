@@ -1,0 +1,5 @@
+1. open package manager console
+2. Enable-Migrations 
+3. Add-Migration <name>
+4. Make modifications if needed
+5. Update-Database -Verbose
