@@ -1,2 +1,2 @@
 # WebApplication
-Backend for the Alarmer project
+Syncronization server for the Alarmer project
